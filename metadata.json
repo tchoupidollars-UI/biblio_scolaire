@@ -1,7 +1,5 @@
 {
   "name": "EduLib - Bibliothèque Numérique",
   "description": "Une application de bibliothèque scolaire complète pour les élèves du secondaire, offrant un accès structuré aux documents PDF, épreuves et ressources pédagogiques de la 3ème à la Terminale.",
-  "requestFramePermissions": [
-    "camera"
-  ]
+  "requestFramePermissions": []
 }
