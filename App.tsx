@@ -11,9 +11,11 @@ import {
   SUBJECTS_CD, SUBJECTS_A4, SUBJECTS_3EME, SEQUENCES 
 } from './types';
 
+// On récupère les variables injectées par vite.config.ts
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY || '';
 
+// Initialisation sécurisée de Supabase
 const supabase = (SUPABASE_URL && SUPABASE_KEY) 
   ? createClient(SUPABASE_URL, SUPABASE_KEY)
   : null;
@@ -33,12 +35,14 @@ const App: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Vérification de la clé API pour Gemini
   const apiKey = process.env.API_KEY;
   const ai = useMemo(() => {
     if (!apiKey) return null;
     return new GoogleGenAI({ apiKey });
   }, [apiKey]);
 
+  // Synchronisation avec Supabase
   useEffect(() => {
     if (!supabase) return;
 
@@ -107,11 +111,13 @@ const App: React.FC = () => {
     setIsUploading(true);
     try {
       const fileName = `${Date.now()}_${file.name}`;
+      
       const { error: uploadError } = await supabase.storage.from('pdf-library').upload(fileName, file);
       if (uploadError) throw uploadError;
 
       const { data: urlData } = supabase.storage.from('pdf-library').getPublicUrl(fileName);
       const publicUrl = urlData.publicUrl;
+      
       const correctedName = await handleAiCorrection(file.name.replace('.pdf', ''));
 
       const newPdf = {
@@ -173,16 +179,6 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen transition-all duration-1000 ease-in-out font-sans text-slate-900" style={{ backgroundColor: bgColor }}>
       
-      {(!apiKey || !SUPABASE_URL) && (
-        <div className="fixed top-0 left-0 right-0 bg-red-600 text-white text-[10px] font-black uppercase tracking-widest py-3 px-6 z-[300] flex flex-col items-center justify-center gap-1 shadow-2xl">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4" /> 
-            ALERTE CONFIGURATION VERCEL
-          </div>
-          <p className="opacity-80">Vérifie les variables d'environnement (Settings &gt; Environment Variables)</p>
-        </div>
-      )}
-
       {(isSyncing || isUploading) && (
         <div className="fixed top-0 left-0 right-0 h-1.5 z-[200]">
           <div className="h-full bg-gradient-to-r from-indigo-600 via-purple-500 to-pink-500 animate-gradient-x w-full" />
@@ -222,6 +218,7 @@ const App: React.FC = () => {
         </button>
       </header>
 
+      {/* Menu Latéral */}
       <div className={`fixed inset-0 z-[120] transition-all duration-700 ${isMenuOpen ? 'visible opacity-100' : 'invisible opacity-0'}`}>
         <div className="absolute inset-0 bg-slate-950/40 backdrop-blur-xl" onClick={() => setIsMenuOpen(false)} />
         <div className={`absolute top-0 left-0 bottom-0 w-full max-w-[400px] bg-white shadow-3xl transition-transform duration-700 ease-[cubic-bezier(0.2,1,0.3,1)] ${isMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
@@ -389,6 +386,7 @@ const App: React.FC = () => {
         )}
       </main>
 
+      {/* Login Admin */}
       {showAdminLogin && (
         <div className="fixed inset-0 z-[300] flex items-center justify-center p-6 bg-slate-950/80 backdrop-blur-3xl animate-in fade-in">
           <div className="w-full max-w-xl bg-white rounded-[60px] p-16 shadow-3xl">
@@ -408,6 +406,7 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* Aperçu PDF */}
       {previewPdf && (
         <div className="fixed inset-0 z-[400] flex flex-col bg-slate-950 p-4 sm:p-12 animate-in slide-in-from-bottom-20 duration-500">
           <div className="flex items-center justify-between p-10 bg-white/5 border border-white/10 rounded-t-[50px] text-white">
@@ -428,6 +427,7 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* Footer Signature */}
       <footer className="fixed bottom-0 left-0 right-0 h-14 bg-white/20 backdrop-blur-xl border-t border-slate-100/20 z-[70] flex items-center justify-center pointer-events-none">
         <span className="text-[10px] font-black text-slate-400 uppercase tracking-[1.5em] opacity-30">NNOMO ZOGO MERLIN RAYAN</span>
       </footer>
