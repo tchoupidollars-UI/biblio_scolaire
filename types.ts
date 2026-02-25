@@ -9,7 +9,7 @@ export interface PdfDocument {
   url: string;
   comment: string;
   category: string;
-  created_at: string; // Utilise le champ automatique de Supabase
+  created_at: string;
 }
 
 export interface NavigationState {
@@ -18,6 +18,24 @@ export interface NavigationState {
   serie?: Serie;
   subject?: string;
   sequence?: Sequence;
+  mode?: 'library' | 'challenge';
+}
+
+export interface ChallengeUser {
+  id: string;
+  username: string;
+  email: string;
+  country: string;
+  points: number;
+}
+
+export interface Challenge {
+  id: string;
+  subject: string;
+  level: Level;
+  serie: Serie | null;
+  pdf_url: string;
+  date: string;
 }
 
 export const SUBJECTS_CD = [
