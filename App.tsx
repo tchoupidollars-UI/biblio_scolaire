@@ -621,10 +621,12 @@ const App: React.FC = () => {
       )}
 
       {/* Footer Signature */}
-      <footer className="fixed bottom-0 left-0 right-0 h-14 bg-white/20 backdrop-blur-xl border-t border-slate-100/20 z-[70] flex items-center justify-center pointer-events-none">
-        <span className="text-[10px] font-black text-slate-400 uppercase tracking-[1.5em] opacity-30">NNOMO ZOGO MERLIN RAYAN</span>
+      <footer className="fixed bottom-16 left-0 right-0 h-10 bg-transparent z-[70] flex items-center justify-center pointer-events-none">
+        <span className="text-[8px] font-black text-slate-400 uppercase tracking-[1.5em] opacity-30">NNOMO ZOGO MERLIN RAYAN</span>
       </footer>
 
+      {/* Sticky Footer Ad */}
+      <AdBanner type="sticky-footer" />
     </div>
   );
 };
@@ -698,13 +700,27 @@ const PdfCard: React.FC<{ pdf: PdfDocument, isAdmin: boolean, onDelete: () => vo
 );
 
 
-const AdBanner: React.FC<{ type: 'horizontal' | 'sidebar' | 'grid' }> = ({ type }) => {
+const AdBanner: React.FC<{ type: 'horizontal' | 'sidebar' | 'grid' | 'sticky-footer' }> = ({ type }) => {
   useEffect(() => {
     try {
       // @ts-ignore
       (window.adsbygoogle = window.adsbygoogle || []).push({});
     } catch (e) {}
   }, []);
+
+  if (type === 'sticky-footer') {
+    return (
+      <div className="fixed bottom-0 left-0 right-0 z-[100] bg-white/80 backdrop-blur-xl border-t border-slate-200 p-2 flex items-center justify-center shadow-2xl animate-in slide-in-from-bottom-full duration-1000">
+        <div className="max-w-4xl w-full relative">
+          <ins className="adsbygoogle"
+               style={{ display: 'inline-block', width: '100%', height: '60px' }}
+               data-ad-client="ca-pub-YOUR_CLIENT_ID"
+               data-ad-slot="YOUR_AD_SLOT_ID"></ins>
+          <div className="absolute -top-6 left-1/2 -translate-x-1/2 px-4 py-1 bg-slate-950 text-white rounded-t-xl text-[7px] font-black uppercase tracking-widest">Sponsorisé par Merlin</div>
+        </div>
+      </div>
+    );
+  }
 
   if (type === 'sidebar' || type === 'grid') {
     return (
@@ -751,6 +767,7 @@ const ChallengeSection: React.FC<{ challengeUser: ChallengeUser | null, setChall
   const [submissionPhotos, setSubmissionPhotos] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [gradingResult, setGradingResult] = useState<{ score: number, feedback: string } | null>(null);
+  const [activeTimeLeft, setActiveTimeLeft] = useState<number>(0);
   const [leaderboard, setLeaderboard] = useState<ChallengeUser[]>([]);
   const [currentChallenge, setCurrentChallenge] = useState<any>(null);
   const [pastChallenges, setPastChallenges] = useState<any[]>([]);
@@ -872,6 +889,53 @@ const ChallengeSection: React.FC<{ challengeUser: ChallengeUser | null, setChall
     }
     return null;
   };
+
+  const getSubjectDuration = (subj: string | null): number => {
+    if (!subj) return 2 * 3600;
+    const s = subj.toUpperCase();
+    if (s.includes('MATHEMATIQUES') || s.includes('MATHS')) return 3 * 3600;
+    if (s.includes('LITTERATURE')) return 3 * 3600;
+    if (s.includes('PHILOSOPHIE') || s.includes('PHILO')) return 3 * 3600;
+    if (s.includes('SVT')) return 3 * 3600;
+    
+    // Default or explicitly 2h
+    if (s.includes('CHIMIE')) return 2 * 3600;
+    if (s.includes('PHYSIQUE')) return 2 * 3600;
+    if (s.includes('LANGUE') || s.includes('ESPAGNOL') || s.includes('ALLEMAND')) return 2 * 3600;
+    if (s.includes('PCT')) return 2 * 3600;
+    if (s.includes('ANGLAIS')) return 2 * 3600;
+    
+    return 2 * 3600;
+  };
+
+  const formatActiveTime = (seconds: number) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
+  useEffect(() => {
+    if (step === 'active' && activeTimeLeft > 0) {
+      const timer = setInterval(() => {
+        setActiveTimeLeft(prev => {
+          if (prev <= 1) {
+            clearInterval(timer);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [step, activeTimeLeft]);
+
+  useEffect(() => {
+    if (step === 'active') {
+      const duration = getSubjectDuration(subject || getDaySubject(level!, serie));
+      setActiveTimeLeft(duration);
+    }
+  }, [step, subject, level, serie]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -1154,6 +1218,10 @@ const ChallengeSection: React.FC<{ challengeUser: ChallengeUser | null, setChall
         <button onClick={() => setIsLogin(!isLogin)} className="w-full mt-8 text-[10px] font-black text-slate-400 uppercase tracking-widest hover:text-red-600 transition-colors">
           {isLogin ? "Pas de compte ? S'inscrire" : "Déjà inscrit ? Se connecter"}
         </button>
+
+        <div className="mt-12">
+          <AdBanner type="horizontal" />
+        </div>
       </div>
     );
   }
@@ -1221,6 +1289,10 @@ const ChallengeSection: React.FC<{ challengeUser: ChallengeUser | null, setChall
                 {getDaySubject(level!, serie) || "Chargement..."}
               </span>
               
+              <div className="px-6 py-2 bg-slate-100 rounded-full text-[10px] font-black uppercase tracking-widest text-slate-500">
+                Durée : {getSubjectDuration(subject || getDaySubject(level!, serie)) / 3600}h
+              </div>
+              
               {getDaySubject(level!, serie)?.includes('/') && !selectedLanguage && (
                 <div className="flex gap-4 mt-4">
                   <button 
@@ -1240,6 +1312,10 @@ const ChallengeSection: React.FC<{ challengeUser: ChallengeUser | null, setChall
             </div>
           </div>
 
+          <div className="mt-8">
+            <AdBanner type="horizontal" />
+          </div>
+
           {timeLeft === '00:00:00' && (getDaySubject(level!, serie)?.includes('/') ? selectedLanguage : true) && (
             <button onClick={() => setStep('active')} className="px-16 py-8 bg-red-600 text-white font-black rounded-[40px] text-2xl uppercase tracking-widest shadow-2xl shadow-red-200 animate-bounce">
               Rejoindre le Défi
@@ -1253,7 +1329,7 @@ const ChallengeSection: React.FC<{ challengeUser: ChallengeUser | null, setChall
           <div className="flex items-center justify-between">
             <h2 className="text-4xl font-black text-slate-950 tracking-tighter uppercase">Épreuve en cours</h2>
             <div className="px-6 py-3 bg-red-600 text-white rounded-full font-black text-xl">
-              60:00
+              {formatActiveTime(activeTimeLeft)}
             </div>
           </div>
           
@@ -1314,6 +1390,10 @@ const ChallengeSection: React.FC<{ challengeUser: ChallengeUser | null, setChall
                 <p className="text-center text-slate-400 font-bold uppercase tracking-widest text-xs py-8">Chargement du classement...</p>
               )}
             </div>
+          </div>
+
+          <div className="mt-8">
+            <AdBanner type="horizontal" />
           </div>
 
           <button onClick={() => setStep('class')} className="text-sm font-black text-slate-400 uppercase tracking-widest hover:text-red-600 transition-colors">
