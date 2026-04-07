@@ -297,29 +297,41 @@ const App: React.FC = () => {
       setSavedPdfs(updated);
       localStorage.setItem('edulib_saved_pdfs', JSON.stringify(updated));
       if ('caches' in window) {
-        const cache = await caches.open('edulib-offline');
-        await cache.delete(pdf.url);
+        try {
+          const cache = await caches.open('edulib-offline');
+          await cache.delete(pdf.url);
+        } catch (e) {
+          console.error("Erreur suppression cache:", e);
+        }
       }
     } else {
       setIsSyncing(true);
+      let cacheSuccess = false;
       try {
-        if (!('caches' in window)) throw new Error("Votre navigateur ne supporte pas le stockage hors-ligne.");
-        const cache = await caches.open('edulib-offline');
-        const response = await fetch(pdf.url);
-        if (!response.ok) throw new Error("Erreur lors de la récupération du fichier");
-        await cache.put(pdf.url, response);
-        
-        const updated = [...savedPdfs, pdf];
-        setSavedPdfs(updated);
-        localStorage.setItem('edulib_saved_pdfs', JSON.stringify(updated));
-        if (confirm("✅ Document enregistré ! Voulez-vous ouvrir la section 'Mes Documents' pour le voir ?")) {
-          setNav({ mode: 'saved' });
+        if ('caches' in window) {
+          const cache = await caches.open('edulib-offline');
+          const response = await fetch(pdf.url);
+          if (response.ok) {
+            await cache.put(pdf.url, response);
+            cacheSuccess = true;
+          }
         }
       } catch (err: any) {
-        alert("❌ Impossible d'enregistrer : " + err.message);
-      } finally {
-        setIsSyncing(false);
+        console.warn("Échec de la mise en cache (CORS ou quota), le document sera accessible via le cloud :", err);
       }
+
+      const updated = [...savedPdfs, pdf];
+      setSavedPdfs(updated);
+      localStorage.setItem('edulib_saved_pdfs', JSON.stringify(updated));
+      
+      const msg = cacheSuccess 
+        ? "✅ Document enregistré ! Il est maintenant disponible même sans connexion."
+        : "✅ Document ajouté à votre liste ! (Note: l'accès hors-ligne a échoué, une connexion sera requise).";
+      
+      if (confirm(`${msg}\n\nVoulez-vous ouvrir la section 'Mes Documents' maintenant ?`)) {
+        setNav({ mode: 'saved' });
+      }
+      setIsSyncing(false);
     }
   };
 
@@ -627,6 +639,9 @@ const App: React.FC = () => {
                     onUpdateComment={handleUpdateComment} 
                   />
                 ))}
+                <div className="mt-12">
+                  <AdBanner type="horizontal" />
+                </div>
               </div>
             )}
           </div>
