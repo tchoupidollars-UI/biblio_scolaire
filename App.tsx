@@ -3,14 +3,14 @@ import {
   Menu, X, BookOpen, Plus, Trash2, Eye, Download, Star, GraduationCap, 
   FileText, Calendar, ChevronRight, School, Library, Compass, Award, 
   Globe, Sparkles, Cloud, RefreshCw, Search, Zap, CheckCircle2, AlertTriangle, ArrowLeft,
-  Trophy, User, Mail, Lock, Flag, Clock, Camera, Send
+  Trophy, User, Mail, Lock, Flag, Clock, Camera, Send, Bookmark, ExternalLink
 } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from '@supabase/supabase-js';
 import { 
   Level, Serie, Sequence, PdfDocument, NavigationState, 
   ChallengeUser, Challenge,
-  SUBJECTS_CD, SUBJECTS_A4, SUBJECTS_3EME, SEQUENCES 
+  SUBJECTS_CD, SUBJECTS_A4, SUBJECTS_3EME, SUBJECTS_BEPC, SEQUENCES 
 } from './types';
 
 // On récupère les variables injectées par vite.config.ts
@@ -44,12 +44,18 @@ const App: React.FC = () => {
   const [adminPassword, setAdminPassword] = useState('');
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [previewPdf, setPreviewPdf] = useState<PdfDocument | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [isBanned, setIsBanned] = useState(localStorage.getItem('edulib_banned') === 'true');
+  const [isKilled, setIsKilled] = useState(false);
   const [challengeUser, setChallengeUser] = useState<ChallengeUser | null>(null);
+  const [savedPdfs, setSavedPdfs] = useState<PdfDocument[]>(() => {
+    const saved = localStorage.getItem('edulib_saved_pdfs');
+    return saved ? JSON.parse(saved) : [];
+  });
   const [adminMode, setAdminMode] = useState<'library' | 'challenges'>('library');
 
   // Scroll to top on navigation
@@ -245,10 +251,87 @@ const App: React.FC = () => {
     }
   };
 
+  const handlePreview = async (pdf: PdfDocument) => {
+    setPreviewPdf(pdf);
+    setIsSyncing(true);
+    try {
+      const isSaved = savedPdfs.some(p => p.id === pdf.id);
+      if (isSaved && 'caches' in window) {
+        const cache = await caches.open('edulib-offline');
+        const response = await cache.match(pdf.url);
+        if (response) {
+          const blob = await response.blob();
+          const url = URL.createObjectURL(blob);
+          setPreviewUrl(url);
+          return;
+        }
+      }
+      // Fallback to network URL
+      setPreviewUrl(pdf.url);
+    } catch (err) {
+      console.error("Erreur lors de la préparation de l'aperçu :", err);
+      setPreviewUrl(pdf.url);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl && previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
+
   const handleUpdateComment = async (id: string, comment: string) => {
     if (!supabase) return;
     const corrected = await handleAiCorrection(comment);
     await supabase.from('pdfs').update({ comment: corrected }).eq('id', id);
+  };
+
+  const handleSaveOffline = async (pdf: PdfDocument) => {
+    const isSaved = savedPdfs.some(p => p.id === pdf.id);
+    if (isSaved) {
+      const updated = savedPdfs.filter(p => p.id !== pdf.id);
+      setSavedPdfs(updated);
+      localStorage.setItem('edulib_saved_pdfs', JSON.stringify(updated));
+      if ('caches' in window) {
+        const cache = await caches.open('edulib-offline');
+        await cache.delete(pdf.url);
+      }
+    } else {
+      setIsSyncing(true);
+      try {
+        if (!('caches' in window)) throw new Error("Votre navigateur ne supporte pas le stockage hors-ligne.");
+        const cache = await caches.open('edulib-offline');
+        const response = await fetch(pdf.url);
+        if (!response.ok) throw new Error("Erreur lors de la récupération du fichier");
+        await cache.put(pdf.url, response);
+        
+        const updated = [...savedPdfs, pdf];
+        setSavedPdfs(updated);
+        localStorage.setItem('edulib_saved_pdfs', JSON.stringify(updated));
+        if (confirm("✅ Document enregistré ! Voulez-vous ouvrir la section 'Mes Documents' pour le voir ?")) {
+          setNav({ mode: 'saved' });
+        }
+      } catch (err: any) {
+        alert("❌ Impossible d'enregistrer : " + err.message);
+      } finally {
+        setIsSyncing(false);
+      }
+    }
+  };
+
+  const toggleKillSwitch = async () => {
+    if (!supabase || !isAdmin || !confirm("🚨 ATTENTION : Voulez-vous vraiment ARRÊTER l'application pour tous les utilisateurs ?")) return;
+    const { error } = await supabase.from('settings').upsert({ key: 'kill_switch', value: 'true' });
+    if (!error) {
+      setIsKilled(true);
+      alert("🛑 Application arrêtée avec succès.");
+    } else {
+      alert("Erreur lors de l'arrêt : " + error.message);
+    }
   };
 
   const filteredPdfs = useMemo(() => {
@@ -266,10 +349,40 @@ const App: React.FC = () => {
       'Première': { icon: <Compass />, color: 'bg-blue-500' },
       'Terminale': { icon: <Award />, color: 'bg-purple-600' },
       'Coin du Bac': { icon: <GraduationCap />, color: 'bg-red-600' },
+      'Coin du Probatoire': { icon: <GraduationCap />, color: 'bg-pink-600' },
+      'Coin du BEPC': { icon: <GraduationCap />, color: 'bg-orange-600' },
       'Coin Externe': { icon: <Globe />, color: 'bg-indigo-600' }
     };
     return s[l] || s['3e'];
   };
+
+  useEffect(() => {
+    if (supabase) {
+      const checkKillSwitch = async () => {
+        const { data } = await supabase.from('settings').select('value').eq('key', 'kill_switch').maybeSingle();
+        if (data?.value === 'true') setIsKilled(true);
+      };
+      checkKillSwitch();
+    }
+  }, []);
+
+  if (isKilled) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6 text-center">
+        <div className="max-w-xl space-y-12">
+          <div className="w-32 h-32 bg-red-600 rounded-[40px] flex items-center justify-center mx-auto shadow-2xl shadow-red-500/50">
+            <Lock className="w-16 h-16 text-white" />
+          </div>
+          <div className="space-y-6">
+            <h1 className="text-5xl font-black text-white tracking-tighter uppercase">Service Interrompu</h1>
+            <p className="text-slate-400 font-bold text-xl leading-relaxed italic">
+              "L'application est temporairement indisponible pour des raisons de sécurité. Veuillez réessayer plus tard."
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (isBanned) {
     return (
@@ -281,7 +394,7 @@ const App: React.FC = () => {
           <div className="space-y-6">
             <h1 className="text-5xl font-black text-white tracking-tighter uppercase">Accès Révoqué</h1>
             <p className="text-slate-400 font-bold text-xl leading-relaxed italic">
-              "Cet appareil a été banni suite à plusieurs tentatives d'intrusion non autorisées. Contactez l'administrateur Merlin pour plus d'informations."
+              "Cet appareil a été banni suite à plusieurs tentatives d'intrusion non autorisées. Contactez l'administrateur pour plus d'informations."
             </p>
           </div>
           <div className="pt-12 border-t border-white/10">
@@ -311,7 +424,7 @@ const App: React.FC = () => {
               <h1 className="text-2xl sm:text-4xl font-black tracking-tighter text-slate-950">EduLib</h1>
               <div className="px-1.5 py-0.5 bg-indigo-600 text-[7px] sm:text-[8px] font-black text-white rounded uppercase animate-pulse">Cloud</div>
             </div>
-            <span className="text-[7px] sm:text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] sm:tracking-[0.4em] leading-none mt-1">NNOMO ZOGO MERLIN</span>
+            <span className="text-[7px] sm:text-[9px] font-black text-slate-400 uppercase tracking-[0.2em] sm:tracking-[0.4em] leading-none mt-1">Bibliothèque Numérique</span>
           </div>
         </div>
 
@@ -324,18 +437,28 @@ const App: React.FC = () => {
           />
         </div>
 
-        <button 
-          onClick={() => isAdmin ? setIsAdmin(false) : setShowAdminLogin(true)} 
-          className={`px-4 sm:px-8 py-3 sm:py-4 rounded-xl sm:rounded-[22px] text-[8px] sm:text-[10px] font-black uppercase tracking-widest transition-all ${isAdmin ? 'bg-red-600 text-white shadow-lg animate-pulse' : 'bg-slate-950 text-white hover:bg-indigo-600 shadow-lg'}`}
-          title={isAdmin ? "Mode Admin Actif" : "Se connecter en tant qu'administrateur"}
-        >
-          {isAdmin ? (
-            <>
-              <span className="sm:hidden">Admin On</span>
-              <span className="hidden sm:inline">Merlin Actif (Quitter)</span>
-            </>
-          ) : 'Accès Merlin'}
-        </button>
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={() => setNav({ mode: 'saved' })}
+            className={`flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 rounded-xl sm:rounded-2xl font-black uppercase tracking-widest text-[8px] sm:text-[10px] transition-all ${nav.mode === 'saved' ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'}`}
+          >
+            <Bookmark className="w-4 h-4" />
+            <span className="hidden md:inline">Mes Documents</span>
+            <span className="bg-emerald-200/50 px-2 py-0.5 rounded-lg text-[7px] sm:text-[8px]">{savedPdfs.length}</span>
+          </button>
+          <button 
+            onClick={() => isAdmin ? setIsAdmin(false) : setShowAdminLogin(true)} 
+            className={`px-4 sm:px-8 py-3 sm:py-4 rounded-xl sm:rounded-[22px] text-[8px] sm:text-[10px] font-black uppercase tracking-widest transition-all ${isAdmin ? 'bg-red-600 text-white shadow-lg animate-pulse' : 'bg-slate-950 text-white hover:bg-indigo-600 shadow-lg'}`}
+            title={isAdmin ? "Mode Admin Actif" : "Se connecter en tant qu'administrateur"}
+          >
+            {isAdmin ? (
+              <>
+                <span className="sm:hidden">Admin On</span>
+                <span className="hidden sm:inline">Admin Actif (Quitter)</span>
+              </>
+            ) : 'Accès Admin'}
+          </button>
+        </div>
       </header>
 
       {/* Menu Latéral */}
@@ -368,6 +491,13 @@ const App: React.FC = () => {
                     <Zap className="w-8 h-8 text-red-600" />
                     <span className="text-sm font-black text-slate-900 uppercase tracking-widest">Défis du Soir</span>
                   </button>
+                  <button 
+                    onClick={() => { setNav({ mode: 'saved' }); setIsMenuOpen(false); }}
+                    className={`p-6 rounded-[30px] border-4 flex items-center gap-6 transition-all ${nav.mode === 'saved' ? 'border-emerald-600 bg-emerald-50/50' : 'border-slate-50'}`}
+                  >
+                    <Bookmark className="w-8 h-8 text-emerald-600" />
+                    <span className="text-sm font-black text-slate-900 uppercase tracking-widest">Mes Documents</span>
+                  </button>
                 </div>
               </section>
 
@@ -398,11 +528,23 @@ const App: React.FC = () => {
               <section className="mt-8">
                 <AdBanner type="sidebar" />
               </section>
+
+              {isAdmin && (
+                <section className="mt-12 p-8 bg-red-50 rounded-[40px] border-2 border-red-100">
+                  <h4 className="text-[10px] font-black text-red-600 uppercase tracking-[0.5em] mb-6">Sécurité Admin</h4>
+                  <button 
+                    onClick={toggleKillSwitch}
+                    className="w-full py-6 bg-red-600 text-white font-black rounded-[25px] uppercase tracking-widest hover:bg-slate-950 transition-all shadow-xl flex items-center justify-center gap-4"
+                  >
+                    <Lock className="w-5 h-5" /> Arrêt d'Urgence
+                  </button>
+                </section>
+              )}
             </div>
 
             <div className="pt-12 border-t border-slate-100 mt-auto text-center">
               <p className="text-[10px] text-slate-300 font-black uppercase tracking-[0.6em] mb-5">Application créée par</p>
-              <p className="text-slate-950 font-black text-xl tracking-tighter uppercase">NNOMO ZOGO MERLIN RAYAN</p>
+              <p className="text-slate-950 font-black text-xl tracking-tighter uppercase">EduLib Team</p>
             </div>
           </div>
         </div>
@@ -439,10 +581,54 @@ const App: React.FC = () => {
 
         {searchQuery ? (
           <div className="space-y-12 animate-in fade-in duration-700">
-            <h2 className="text-5xl font-black tracking-tighter text-slate-950">Exploration <span className="text-indigo-600">Cloud</span></h2>
+            <h2 className="text-3xl sm:text-5xl font-black tracking-tighter text-slate-950">Exploration <span className="text-indigo-600">Cloud</span></h2>
             <div className="grid grid-cols-1 gap-10">
-              {filteredPdfs.map(pdf => <PdfCard key={pdf.id} pdf={pdf} isAdmin={isAdmin} onDelete={() => handleDelete(pdf.id, pdf.url)} onPreview={() => setPreviewPdf(pdf)} onUpdateComment={handleUpdateComment} />)}
+              {filteredPdfs.map(pdf => (
+                <PdfCard 
+                  key={pdf.id} 
+                  pdf={pdf} 
+                  isAdmin={isAdmin} 
+                  isSaved={savedPdfs.some(p => p.id === pdf.id)}
+                  onDelete={() => handleDelete(pdf.id, pdf.url)} 
+                  onPreview={() => handlePreview(pdf)} 
+                  onSave={() => handleSaveOffline(pdf)}
+                  onUpdateComment={handleUpdateComment} 
+                />
+              ))}
             </div>
+          </div>
+        ) : nav.mode === 'saved' ? (
+          <div className="space-y-12 animate-in fade-in duration-700">
+            <div className="flex flex-col md:flex-row md:items-end justify-between gap-12 border-b border-slate-200/40 pb-16">
+              <div className="flex flex-col">
+                <h3 className="text-4xl sm:text-6xl font-black text-slate-950 tracking-tighter uppercase mb-6">Mes Documents</h3>
+                <div className="px-6 py-3 bg-emerald-50 text-emerald-600 rounded-full text-[10px] font-black uppercase tracking-[0.4em] inline-flex items-center gap-3 w-fit">
+                  <Bookmark className="w-4 h-4" /> Mode Hors-ligne
+                </div>
+              </div>
+            </div>
+            {savedPdfs.length === 0 ? (
+              <div className="p-20 text-center bg-white rounded-[60px] border-4 border-dashed border-slate-100">
+                <Bookmark className="w-20 h-20 text-slate-200 mx-auto mb-8" />
+                <p className="text-2xl font-black text-slate-400 uppercase tracking-widest">Aucun document enregistré</p>
+                <button onClick={() => setNav({ mode: 'library' })} className="mt-8 px-10 py-5 bg-indigo-600 text-white font-black rounded-3xl uppercase tracking-widest shadow-xl hover:scale-105 transition-all">Parcourir la bibliothèque</button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-10">
+                {savedPdfs.map(pdf => (
+                  <PdfCard 
+                    key={pdf.id} 
+                    pdf={pdf} 
+                    isAdmin={isAdmin} 
+                    isSaved={true}
+                    onDelete={() => handleDelete(pdf.id, pdf.url)} 
+                    onPreview={() => handlePreview(pdf)} 
+                    onSave={() => handleSaveOffline(pdf)}
+                    onUpdateComment={handleUpdateComment} 
+                  />
+                ))}
+              </div>
+            )}
           </div>
         ) : !nav.level ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-10">
@@ -467,26 +653,26 @@ const App: React.FC = () => {
               </div>
             </button>
 
-            {(['3e', 'Seconde', 'Première', 'Terminale', 'Coin du Bac', 'Coin Externe'] as Level[]).map((l) => {
+            {(['3e', 'Seconde', 'Première', 'Terminale', 'Coin du Bac', 'Coin du Probatoire', 'Coin du BEPC', 'Coin Externe'] as Level[]).map((l) => {
               const s = getStyleForLevel(l);
               return <NavCard key={l} title={l} icon={s.icon} colorClass={s.color} onClick={() => setNav({ level: l })} />;
             })}
             {isAdmin && (
               <div className="col-span-1 sm:col-span-2 lg:col-span-3 p-8 bg-indigo-50 border-2 border-dashed border-indigo-200 rounded-[40px] text-center">
-                <p className="text-indigo-600 font-black uppercase tracking-widest text-[10px]">💡 Mode Merlin Actif : Naviguez dans une classe et une matière pour ajouter des documents.</p>
+                <p className="text-indigo-600 font-black uppercase tracking-widest text-[10px]">💡 Mode Admin Actif : Naviguez dans une classe et une matière pour ajouter des documents.</p>
               </div>
             )}
             <div className="hidden sm:block">
               <AdBanner type="grid" />
             </div>
           </div>
-        ) : nav.level === 'Coin du Bac' && !nav.year ? (
+        ) : (nav.level === 'Coin du Bac' || nav.level === 'Coin du Probatoire' || nav.level === 'Coin du BEPC') && !nav.year ? (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
             {Array.from({ length: 2025 - 2018 + 1 }, (_, i) => (2025 - i).toString()).map(y => (
               <NavCard key={y} title={y} icon={<Calendar />} colorClass="bg-red-600" onClick={() => setNav(p => ({ ...p, year: y }))} />
             ))}
           </div>
-        ) : nav.level === 'Coin du Bac' && nav.year && !nav.serie ? (
+        ) : (nav.level === 'Coin du Bac' || nav.level === 'Coin du Probatoire') && nav.year && !nav.serie ? (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
             {(['C', 'D', 'A4'] as Serie[]).map(s => (
               <NavCard key={s} title={`Série ${s}`} icon={<Award />} colorClass="bg-purple-600" onClick={() => setNav(p => ({ ...p, serie: s }))} />
@@ -504,13 +690,13 @@ const App: React.FC = () => {
               <NavCard key={s} title={`Série ${s}`} icon={<Award />} colorClass="bg-purple-600" onClick={() => setNav(p => ({ ...p, serie: s }))} />
             ))}
           </div>
-        ) : nav.level && nav.level !== 'Coin Externe' && (nav.level === '3e' || nav.serie) && !nav.subject ? (
+        ) : nav.level && nav.level !== 'Coin Externe' && (nav.level === '3e' || nav.level === 'Coin du BEPC' || nav.serie) && !nav.subject ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {(nav.level === '3e' ? SUBJECTS_3EME : nav.serie === 'A4' ? SUBJECTS_A4 : SUBJECTS_CD).map(subj => (
+            {(nav.level === '3e' || nav.level === 'Coin du BEPC' ? SUBJECTS_BEPC : nav.serie === 'A4' ? SUBJECTS_A4 : SUBJECTS_CD).map((subj: string) => (
               <NavCard key={subj} title={subj} icon={<Sparkles />} colorClass="bg-emerald-600" onClick={() => setNav(p => ({ ...p, subject: subj }))} />
             ))}
           </div>
-        ) : nav.level && nav.level !== 'Coin Externe' && nav.subject && !nav.sequence && nav.level !== 'Coin du Bac' ? (
+        ) : nav.level && nav.level !== 'Coin Externe' && nav.subject && !nav.sequence && (nav.level !== 'Coin du Bac' && nav.level !== 'Coin du Probatoire' && nav.level !== 'Coin du BEPC') ? (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
             {SEQUENCES.filter(s => nav.level === 'Seconde' ? s !== 'Epreuve Zéro' : true).map(seq => (
               <NavCard key={seq} title={seq} icon={<Zap />} colorClass="bg-blue-600" onClick={() => setNav(p => ({ ...p, sequence: seq as Sequence }))} />
@@ -524,7 +710,7 @@ const App: React.FC = () => {
                   {nav.sequence || nav.subject || nav.year || nav.level}
                 </h3>
                 <div className="px-6 py-3 bg-indigo-50 text-indigo-600 rounded-full text-[10px] font-black uppercase tracking-[0.4em] inline-flex items-center gap-3 w-fit">
-                  <Cloud className="w-4 h-4" /> Merlin Cloud Live
+                  <Cloud className="w-4 h-4" /> EduLib Cloud Live
                 </div>
               </div>
               {isAdmin && (
@@ -569,7 +755,18 @@ const App: React.FC = () => {
                 </div>
               ) : (
                 <>
-                  {filteredPdfs.map(pdf => <PdfCard key={pdf.id} pdf={pdf} isAdmin={isAdmin} onDelete={() => handleDelete(pdf.id, pdf.url)} onPreview={() => setPreviewPdf(pdf)} onUpdateComment={handleUpdateComment} />)}
+                  {filteredPdfs.map(pdf => (
+                    <PdfCard 
+                      key={pdf.id} 
+                      pdf={pdf} 
+                      isAdmin={isAdmin} 
+                      isSaved={savedPdfs.some(p => p.id === pdf.id)}
+                      onDelete={() => handleDelete(pdf.id, pdf.url)} 
+                      onPreview={() => handlePreview(pdf)} 
+                      onSave={() => handleSaveOffline(pdf)}
+                      onUpdateComment={handleUpdateComment} 
+                    />
+                  ))}
                   <div className="mt-12">
                     <AdBanner type="horizontal" />
                   </div>
@@ -586,7 +783,7 @@ const App: React.FC = () => {
       {showAdminLogin && (
         <div className="fixed inset-0 z-[300] flex items-center justify-center p-6 bg-slate-950/80 backdrop-blur-3xl animate-in fade-in">
           <div className="w-full max-w-xl bg-white rounded-[60px] p-16 shadow-3xl">
-            <h3 className="text-4xl font-black text-slate-950 tracking-tighter text-center mb-12 uppercase">Accès Merlin</h3>
+            <h3 className="text-4xl font-black text-slate-950 tracking-tighter text-center mb-12 uppercase">Accès Admin</h3>
             <form onSubmit={handleAdminLogin} className="space-y-8">
               <input 
                 type="password" placeholder="Mot de passe secret..." value={adminPassword} 
@@ -604,17 +801,56 @@ const App: React.FC = () => {
 
       {/* Aperçu PDF */}
       {previewPdf && (
-        <div className="fixed inset-0 z-[400] flex flex-col bg-slate-950 p-4 sm:p-12 animate-in slide-in-from-bottom-20 duration-500">
-          <div className="flex items-center justify-between p-10 bg-white/5 border border-white/10 rounded-t-[50px] text-white">
-            <div className="flex items-center gap-8">
-              <div className="p-6 bg-red-600 rounded-[30px]"><FileText className="w-10 h-10" /></div>
-              <span className="text-2xl font-black tracking-tight line-clamp-1">{previewPdf.name}</span>
+        <div className="fixed inset-0 z-[400] flex flex-col bg-slate-950 p-2 sm:p-12 animate-in slide-in-from-bottom-20 duration-500">
+          <div className="flex items-center justify-between p-6 sm:p-10 bg-white/5 border border-white/10 rounded-t-[30px] sm:rounded-t-[50px] text-white">
+            <div className="flex items-center gap-4 sm:gap-8">
+              <div className="p-4 sm:p-6 bg-red-600 rounded-2xl sm:rounded-[30px]"><FileText className="w-6 h-6 sm:w-10 h-10" /></div>
+              <span className="text-lg sm:text-2xl font-black tracking-tight line-clamp-1">{previewPdf.name}</span>
             </div>
-            <button onClick={() => setPreviewPdf(null)} className="p-6 bg-white/10 hover:bg-red-600 text-white rounded-[30px] transition-all"><X className="w-10 h-10" /></button>
+            <div className="flex items-center gap-3">
+              <button 
+                onClick={() => window.open(previewUrl || previewPdf.url, '_blank')}
+                className="hidden sm:flex items-center gap-3 px-6 py-4 bg-white/10 hover:bg-indigo-600 text-white rounded-2xl transition-all text-[10px] font-black uppercase tracking-widest"
+                title="Ouvrir dans un nouvel onglet"
+              >
+                <ExternalLink className="w-5 h-5" /> Ouvrir
+              </button>
+              <button onClick={() => { setPreviewPdf(null); setPreviewUrl(null); }} className="p-4 sm:p-6 bg-white/10 hover:bg-red-600 text-white rounded-2xl sm:rounded-[30px] transition-all"><X className="w-6 h-6 sm:w-10 h-10" /></button>
+            </div>
           </div>
-          <div className="flex-1 bg-white rounded-b-[50px] overflow-hidden flex flex-col">
-            <div className="flex-1">
-              <iframe src={`${previewPdf.url}#toolbar=0`} className="w-full h-full border-none" title="Aperçu" />
+          <div className="flex-1 bg-white rounded-b-[30px] sm:rounded-b-[50px] overflow-hidden flex flex-col">
+            <div className="flex-1 relative">
+              {previewUrl ? (
+                <object 
+                  data={`${previewUrl}${previewUrl.startsWith('blob:') ? '' : '#toolbar=0'}`} 
+                  type="application/pdf" 
+                  className="w-full h-full"
+                >
+                  <iframe 
+                    src={`${previewUrl}${previewUrl.startsWith('blob:') ? '' : '#toolbar=0'}`} 
+                    className="w-full h-full border-none" 
+                    title="Aperçu" 
+                  />
+                </object>
+              ) : (
+                <div className="w-full h-full flex items-center justify-center bg-slate-50">
+                  <RefreshCw className="w-12 h-12 text-slate-200 animate-spin" />
+                </div>
+              )}
+            </div>
+            <div className="p-4 flex flex-col gap-3 sm:hidden bg-slate-50 border-t border-slate-100">
+              <button 
+                onClick={() => window.open(previewUrl || previewPdf.url, '_blank')}
+                className="w-full py-4 bg-indigo-600 text-white font-black rounded-2xl uppercase tracking-widest text-[10px] flex items-center justify-center gap-3"
+              >
+                <ExternalLink className="w-4 h-4" /> Ouvrir le document
+              </button>
+              <button 
+                onClick={() => { setPreviewPdf(null); setPreviewUrl(null); }}
+                className="w-full py-4 bg-slate-950 text-white font-black rounded-2xl uppercase tracking-widest text-[10px]"
+              >
+                Fermer l'aperçu
+              </button>
             </div>
           </div>
         </div>
@@ -622,7 +858,7 @@ const App: React.FC = () => {
 
       {/* Footer Signature */}
       <footer className="fixed bottom-16 left-0 right-0 h-10 bg-transparent z-[70] flex items-center justify-center pointer-events-none">
-        <span className="text-[8px] font-black text-slate-400 uppercase tracking-[1.5em] opacity-30">NNOMO ZOGO MERLIN RAYAN</span>
+        <span className="text-[8px] font-black text-slate-400 uppercase tracking-[1.5em] opacity-30">EDULIB DIGITAL</span>
       </footer>
 
       {/* Sticky Footer Ad */}
@@ -644,7 +880,15 @@ const NavCard: React.FC<{ title: string, icon: any, colorClass: string, onClick:
   </button>
 );
 
-const PdfCard: React.FC<{ pdf: PdfDocument, isAdmin: boolean, onDelete: () => void, onPreview: () => void, onUpdateComment: (id: string, c: string) => void }> = ({ pdf, isAdmin, onDelete, onPreview, onUpdateComment }) => (
+const PdfCard: React.FC<{ 
+  pdf: PdfDocument, 
+  isAdmin: boolean, 
+  isSaved: boolean,
+  onDelete: () => void, 
+  onPreview: () => void, 
+  onSave: () => void,
+  onUpdateComment: (id: string, c: string) => void 
+}> = ({ pdf, isAdmin, isSaved, onDelete, onPreview, onSave, onUpdateComment }) => (
   <div className="group bg-white rounded-[40px] sm:rounded-[60px] p-6 sm:p-12 shadow-xl shadow-slate-100/40 border-2 border-slate-50 hover:border-indigo-100 transition-all duration-500">
     <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-8 sm:gap-12">
       <div className="flex items-center gap-6 sm:gap-10">
@@ -659,20 +903,18 @@ const PdfCard: React.FC<{ pdf: PdfDocument, isAdmin: boolean, onDelete: () => vo
           </div>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4">
         <button onClick={onPreview} className="flex-1 flex items-center justify-center gap-3 sm:gap-4 px-6 sm:px-12 py-4 sm:py-6 bg-slate-950 text-white font-black rounded-2xl sm:rounded-[30px] hover:bg-indigo-600 transition-all active:scale-95 shadow-lg">
           <Eye className="w-5 h-5 sm:w-6 h-6" /> <span className="uppercase tracking-[0.1em] sm:tracking-[0.2em] text-[9px] sm:text-[11px]">Aperçu</span>
         </button>
-        <a 
-          href={pdf.url} 
-          download={pdf.name} 
-          target="_blank" 
-          rel="noopener noreferrer"
-          className="flex items-center justify-center p-4 sm:p-6 bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-2xl sm:rounded-[30px] hover:bg-emerald-600 hover:text-white transition-all shadow-lg"
-          title="Télécharger"
+        <button 
+          onClick={onSave}
+          className={`flex-1 flex items-center justify-center gap-3 px-6 sm:px-8 py-4 sm:py-6 rounded-2xl sm:rounded-[30px] transition-all shadow-lg ${isSaved ? 'bg-emerald-600 text-white' : 'bg-emerald-50 text-emerald-600 border border-emerald-100 hover:bg-emerald-600 hover:text-white'}`}
+          title={isSaved ? "Retirer de l'application" : "Enregistrer dans l'application"}
         >
-          <Download className="w-6 h-6 sm:w-8 h-8" />
-        </a>
+          {isSaved ? <CheckCircle2 className="w-5 h-5 sm:w-6 h-6" /> : <Bookmark className="w-5 h-5 sm:w-6 h-6" />}
+          <span className="uppercase tracking-widest text-[9px] sm:text-[11px] font-black">{isSaved ? 'Enregistré' : 'Enregistrer'}</span>
+        </button>
         {isAdmin && (
           <button onClick={onDelete} className="p-4 sm:p-6 bg-red-50 text-red-500 border border-red-100 rounded-2xl sm:rounded-[30px] hover:bg-red-600 hover:text-white transition-all">
             <Trash2 className="w-6 h-6 sm:w-8 h-8" />
@@ -682,7 +924,7 @@ const PdfCard: React.FC<{ pdf: PdfDocument, isAdmin: boolean, onDelete: () => vo
     </div>
     <div className="mt-8 sm:mt-12 pt-8 sm:pt-12 border-t-2 border-slate-50 flex flex-col gap-4 sm:gap-6">
       <span className="text-[9px] sm:text-[11px] font-black text-indigo-500 uppercase tracking-[0.4em] sm:tracking-[0.6em] flex items-center gap-3">
-        <Sparkles className="w-3 h-3 sm:w-4 h-4" /> Note de Merlin
+        <Sparkles className="w-3 h-3 sm:w-4 h-4" /> Note de l'Équipe
       </span>
       {isAdmin ? (
         <textarea 
@@ -716,7 +958,7 @@ const AdBanner: React.FC<{ type: 'horizontal' | 'sidebar' | 'grid' | 'sticky-foo
                style={{ display: 'inline-block', width: '100%', height: '60px' }}
                data-ad-client="ca-pub-YOUR_CLIENT_ID"
                data-ad-slot="YOUR_AD_SLOT_ID"></ins>
-          <div className="absolute -top-6 left-1/2 -translate-x-1/2 px-4 py-1 bg-slate-950 text-white rounded-t-xl text-[7px] font-black uppercase tracking-widest">Sponsorisé par Merlin</div>
+          <div className="absolute -top-6 left-1/2 -translate-x-1/2 px-4 py-1 bg-slate-950 text-white rounded-t-xl text-[7px] font-black uppercase tracking-widest">Sponsorisé par EduLib</div>
         </div>
       </div>
     );
@@ -933,7 +1175,12 @@ const ChallengeSection: React.FC<{ challengeUser: ChallengeUser | null, setChall
   useEffect(() => {
     if (step === 'active') {
       const duration = getSubjectDuration(subject || getDaySubject(level!, serie));
-      setActiveTimeLeft(duration);
+      const now = new Date();
+      const startTime = new Date();
+      startTime.setHours(21, 0, 0, 0);
+      const endTime = new Date(startTime.getTime() + duration * 1000);
+      const remaining = Math.max(0, Math.floor((endTime.getTime() - now.getTime()) / 1000));
+      setActiveTimeLeft(remaining);
     }
   }, [step, subject, level, serie]);
 

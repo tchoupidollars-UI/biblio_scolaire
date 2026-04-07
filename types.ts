@@ -1,5 +1,5 @@
 
-export type Level = '3e' | 'Seconde' | 'Première' | 'Terminale' | 'Coin du Bac' | 'Coin Externe';
+export type Level = '3e' | 'Seconde' | 'Première' | 'Terminale' | 'Coin du Bac' | 'Coin du Probatoire' | 'Coin du BEPC' | 'Coin Externe';
 export type Serie = 'C' | 'D' | 'A4' | 'Générale';
 export type Sequence = '1ère Séquence' | '2e Séquence' | '3e Séquence' | '4e Séquence' | '5e Séquence' | '6e Séquence' | 'Epreuve Zéro';
 
@@ -18,7 +18,7 @@ export interface NavigationState {
   serie?: Serie;
   subject?: string;
   sequence?: Sequence;
-  mode?: 'library' | 'challenge';
+  mode?: 'library' | 'challenge' | 'saved';
 }
 
 export interface ChallengeUser {
@@ -47,6 +47,10 @@ export const SUBJECTS_A4 = [
 ];
 
 export const SUBJECTS_3EME = [
+  'MATHEMATIQUES', 'PCT', 'SVT', 'FRANCAIS', 'ANGLAIS', 'HISTOIRE', 'GEOGRAPHIE', 'ECM'
+];
+
+export const SUBJECTS_BEPC = [
   'MATHEMATIQUES', 'PCT', 'SVT', 'FRANCAIS', 'ANGLAIS', 'HISTOIRE', 'GEOGRAPHIE', 'ECM'
 ];
 
