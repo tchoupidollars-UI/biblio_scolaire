@@ -88,7 +88,7 @@ const AgentUpload: React.FC<AgentUploadProps> = ({ supabase, ai, onClose, onSucc
       Texte extrait: "${text}"`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-1.5-flash',
         contents: prompt
       });
 

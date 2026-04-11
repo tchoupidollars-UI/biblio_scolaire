@@ -23,7 +23,10 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 // On récupère les variables injectées par vite.config.ts
 // Nettoyage des variables d'environnement (retrait des guillemets ou espaces accidentels)
-const cleanEnv = (val: string | undefined) => (val || '').replace(/['"]/g, '').trim();
+const cleanEnv = (val: any) => {
+  if (!val || String(val) === 'undefined' || String(val) === 'null') return '';
+  return String(val).replace(/['"]/g, '').trim();
+};
 
 const SUPABASE_URL = cleanEnv(process.env.SUPABASE_URL);
 const SUPABASE_KEY = cleanEnv(process.env.SUPABASE_ANON_KEY);
@@ -108,10 +111,16 @@ const App: React.FC = () => {
   };
 
   // Vérification de la clé API pour Gemini
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = cleanEnv(process.env.GEMINI_API_KEY || process.env.API_KEY);
   const ai = useMemo(() => {
     if (!apiKey) return null;
     return new GoogleGenAI({ apiKey });
+  }, [apiKey]);
+
+  useEffect(() => {
+    if (apiKey) {
+      console.log(`🔑 Gemini Key: ${apiKey.length} chars, starts with ${apiKey.substring(0, 4)}...`);
+    }
   }, [apiKey]);
 
   // Synchronisation avec Supabase
@@ -217,7 +226,7 @@ const App: React.FC = () => {
       
       if (text.trim().length > 50) {
         const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
+          model: 'gemini-1.5-flash',
           contents: `Tu es un expert en éducation au Cameroun. Analyse cet en-tête d'épreuve et génère un nom de fichier court, propre et descriptif (ex: Bac_Maths_C_2024_Centre). Réponds UNIQUEMENT avec le nom suggéré, sans extension .pdf. Texte de l'en-tête : "${text.substring(0, 1000)}"`,
         });
         return response.text?.trim().replace(/[\s/\\:*?"<>|]/g, '_') || file.name.replace('.pdf', '');
@@ -233,7 +242,7 @@ const App: React.FC = () => {
         const imageData = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
 
         const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
+          model: 'gemini-1.5-flash',
           contents: {
             parts: [
               { text: "Analyse cet en-tête d'épreuve scolaire camerounaise et génère un nom de fichier court et descriptif (ex: Bac_Maths_C_2024_Centre). Réponds UNIQUEMENT avec le nom suggéré, sans extension .pdf." },
