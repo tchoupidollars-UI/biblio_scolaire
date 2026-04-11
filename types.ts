@@ -1,7 +1,7 @@
 
 export type Level = '3e' | 'Seconde' | 'Première' | 'Terminale' | 'Coin du Bac' | 'Coin du Probatoire' | 'Coin du BEPC' | 'Coin Externe';
 export type Serie = 'C' | 'D' | 'A4' | 'Générale';
-export type Sequence = '1ère Séquence' | '2e Séquence' | '3e Séquence' | '4e Séquence' | '5e Séquence' | '6e Séquence' | 'Epreuve Zéro';
+export type Sequence = '1ère Séquence' | '2e Séquence' | '3e Séquence' | '4e Séquence' | '5e Séquence' | '6e Séquence' | 'Examen Blanc' | 'Examen Officiel';
 
 export interface PdfDocument {
   id: string;
@@ -55,5 +55,5 @@ export const SUBJECTS_BEPC = [
 ];
 
 export const SEQUENCES = [
-  '1ère Séquence', '2e Séquence', '3e Séquence', '4e Séquence', '5e Séquence', '6e Séquence', 'Epreuve Zéro'
+  '1ère Séquence', '2e Séquence', '3e Séquence', '4e Séquence', '5e Séquence', '6e Séquence', 'Examen Blanc', 'Examen Officiel'
 ];

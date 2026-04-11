@@ -7,11 +7,19 @@ import {
 } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from '@supabase/supabase-js';
+import * as pdfjsLib from 'pdfjs-dist';
+// @ts-ignore
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { AnimatePresence } from 'motion/react';
 import { 
   Level, Serie, Sequence, PdfDocument, NavigationState, 
   ChallengeUser, Challenge,
   SUBJECTS_CD, SUBJECTS_A4, SUBJECTS_3EME, SUBJECTS_BEPC, SEQUENCES 
 } from './types';
+import AgentUpload from './AgentUpload';
+
+// Configuration du worker PDF.js
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 // On récupère les variables injectées par vite.config.ts
 // Nettoyage des variables d'environnement (retrait des guillemets ou espaces accidentels)
@@ -40,9 +48,10 @@ const App: React.FC = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [nav, setNav] = useState<NavigationState>({});
   const [bgColor, setBgColor] = useState(localStorage.getItem(THEME_KEY) || '#ffffff');
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(true);
   const [adminPassword, setAdminPassword] = useState('');
   const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [showAgentUpload, setShowAgentUpload] = useState(false);
   const [previewPdf, setPreviewPdf] = useState<PdfDocument | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -99,7 +108,7 @@ const App: React.FC = () => {
   };
 
   // Vérification de la clé API pour Gemini
-  const apiKey = process.env.API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   const ai = useMemo(() => {
     if (!apiKey) return null;
     return new GoogleGenAI({ apiKey });
@@ -108,6 +117,12 @@ const App: React.FC = () => {
   // Synchronisation avec Supabase
   useEffect(() => {
     if (!supabase) return;
+
+    // Vérifier si on doit ouvrir l'agent IA via l'URL (?agent=true)
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('agent') === 'true') {
+      setShowAgentUpload(true);
+    }
 
     const fetchPdfs = async () => {
       setIsSyncing(true);
@@ -139,11 +154,14 @@ const App: React.FC = () => {
     if (!text || text.length < 3 || !ai) return text;
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: `Tu es un correcteur orthographique pour une application scolaire camerounaise. Corrige l'orthographe de ce titre ou commentaire : "${text}". Réponds UNIQUEMENT avec le texte corrigé.`,
+        model: "gemini-3-flash-preview",
+        contents: `Tu es un correcteur orthographique pour une application scolaire camerounaise. Corrige l'orthographe de ce titre ou commentaire : "${text}". Réponds UNIQUEMENT avec le texte corrigé.`
       });
       return response.text?.trim() || text;
-    } catch (e) { return text; }
+    } catch (e) { 
+      console.error("Erreur IA Correction:", e);
+      return text; 
+    }
   };
 
   const resetNav = () => { setNav({}); setSearchQuery(''); };
@@ -185,55 +203,124 @@ const App: React.FC = () => {
 
   const currentPath = [nav.level, nav.year, nav.serie, nav.subject, nav.sequence].filter(Boolean).join(' > ');
 
+  const generateNameFromPdf = async (file: File): Promise<string> => {
+    if (!ai) return file.name.replace('.pdf', '');
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+      const pdf = await loadingTask.promise;
+      const page = await pdf.getPage(1);
+      
+      // Tentative d'extraction de texte
+      const textContent = await page.getTextContent();
+      const text = textContent.items.map((item: any) => item.str).join(' ');
+      
+      if (text.trim().length > 50) {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: `Tu es un expert en éducation au Cameroun. Analyse cet en-tête d'épreuve et génère un nom de fichier court, propre et descriptif (ex: Bac_Maths_C_2024_Centre). Réponds UNIQUEMENT avec le nom suggéré, sans extension .pdf. Texte de l'en-tête : "${text.substring(0, 1000)}"`,
+        });
+        return response.text?.trim().replace(/[\s/\\:*?"<>|]/g, '_') || file.name.replace('.pdf', '');
+      } else {
+        // Probablement un scan, on envoie une capture de la page à l'IA
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+        // @ts-ignore
+        await page.render({ canvasContext: context!, viewport }).promise;
+        const imageData = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+
+        const response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: {
+            parts: [
+              { text: "Analyse cet en-tête d'épreuve scolaire camerounaise et génère un nom de fichier court et descriptif (ex: Bac_Maths_C_2024_Centre). Réponds UNIQUEMENT avec le nom suggéré, sans extension .pdf." },
+              { inlineData: { mimeType: "image/jpeg", data: imageData } }
+            ]
+          }
+        });
+        return response.text?.trim().replace(/[\s/\\:*?"<>|]/g, '_') || file.name.replace('.pdf', '');
+      }
+    } catch (e) {
+      console.error("Erreur analyse PDF:", e);
+      return file.name.replace('.pdf', '');
+    }
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!supabase) {
       alert("❌ Erreur : Supabase n'est pas configuré. Vérifiez vos variables d'environnement SUPABASE_URL et SUPABASE_ANON_KEY dans les Secrets.");
       return;
     }
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
 
     setIsUploading(true);
-    try {
-      const fileName = `${Date.now()}_${file.name}`;
-      
-      const { error: uploadError } = await supabase.storage.from('pdf-library').upload(fileName, file);
-      if (uploadError) {
-        throw new Error(`Erreur Storage : ${uploadError.message}. Vérifiez que le bucket 'pdf-library' existe et est public.`);
-      }
+    let successCount = 0;
+    let errorCount = 0;
 
-      const { data: urlData } = supabase.storage.from('pdf-library').getPublicUrl(fileName);
-      const publicUrl = urlData.publicUrl;
-      
-      const correctedName = await handleAiCorrection(file.name.replace('.pdf', ''));
+    for (const file of Array.from(files)) {
+      try {
+        // Analyse de l'en-tête pour le renommage
+        const correctedName = await generateNameFromPdf(file);
+        const finalFileName = `${Date.now()}_${correctedName.replace(/[\s/\\:*?"<>|]/g, '_')}.pdf`;
+        
+        const { error: uploadError } = await supabase.storage.from('pdf-library').upload(finalFileName, file);
+        if (uploadError) {
+          throw new Error(`Erreur Storage : ${uploadError.message}. Assurez-vous que le bucket 'pdf-library' existe et est public.`);
+        }
 
-      if (adminMode === 'challenges') {
-        const newChallenge = {
-          subject: nav.subject || 'MATHEMATIQUES',
-          level: nav.level || 'Terminale',
-          serie: nav.serie || null,
-          pdf_url: publicUrl,
-          date: new Date().toISOString().split('T')[0]
-        };
-        const { error: challengeError } = await supabase.from('challenges').insert([newChallenge]);
-        if (challengeError) throw new Error(`Erreur Table Challenges : ${challengeError.message}`);
-        alert("🚀 Défi programmé pour ce soir !");
-      } else {
-        const newPdf = {
-          name: correctedName + '.pdf',
-          url: publicUrl,
-          comment: '',
-          category: currentPath
-        };
-        const { error: insertError } = await supabase.from('pdfs').insert([newPdf]);
-        if (insertError) throw new Error(`Erreur Table PDFs : ${insertError.message}`);
-        alert("✅ Document ajouté à la bibliothèque !");
+        const { data: urlData } = supabase.storage.from('pdf-library').getPublicUrl(finalFileName);
+        const publicUrl = urlData.publicUrl;
+        
+        if (adminMode === 'challenges') {
+          const newChallenge = {
+            subject: nav.subject || 'MATHEMATIQUES',
+            level: nav.level || 'Terminale',
+            serie: nav.serie || null,
+            pdf_url: publicUrl,
+            date: new Date().toISOString().split('T')[0]
+          };
+          const { error: challengeError } = await supabase.from('challenges').insert([newChallenge]);
+          if (challengeError) throw new Error(`Erreur Table Challenges : ${challengeError.message}`);
+          successCount++;
+        } else {
+          // Vérification des doublons
+          const { data: existing } = await supabase
+            .from('pdfs')
+            .select('id')
+            .eq('name', correctedName + '.pdf')
+            .eq('category', currentPath)
+            .maybeSingle();
+          
+          if (existing) {
+            console.warn(`Le document "${correctedName}.pdf" existe déjà dans cette rubrique.`);
+            continue;
+          }
+
+          const newPdf = {
+            name: correctedName + '.pdf',
+            url: publicUrl,
+            comment: '',
+            category: currentPath
+          };
+          const { error: insertError } = await supabase.from('pdfs').insert([newPdf]);
+          if (insertError) throw new Error(`Erreur Table PDFs : ${insertError.message}`);
+          successCount++;
+        }
+      } catch (err: any) {
+        console.error(`Erreur pour ${file.name}:`, err);
+        errorCount++;
       }
-    } catch (err: any) {
-      alert(err.message);
-      console.error(err);
-    } finally {
-      setIsUploading(false);
+    }
+
+    setIsUploading(false);
+    if (errorCount === 0) {
+      alert(adminMode === 'challenges' ? "🚀 Défi(s) programmé(s) !" : "✅ Document(s) ajouté(s) !");
+    } else {
+      alert(`Terminé avec ${successCount} succès et ${errorCount} erreur(s). Vérifiez la console pour plus de détails.`);
     }
   };
 
@@ -613,6 +700,12 @@ const App: React.FC = () => {
           <div className="space-y-12 animate-in fade-in duration-700">
             <div className="flex flex-col md:flex-row md:items-end justify-between gap-12 border-b border-slate-200/40 pb-16">
               <div className="flex flex-col">
+                <button 
+                  onClick={resetNav}
+                  className="mb-8 flex items-center gap-3 px-6 py-3 bg-slate-950 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 transition-all active:scale-95 shadow-lg w-fit"
+                >
+                  <ArrowLeft className="w-4 h-4" /> Retour à la bibliothèque
+                </button>
                 <h3 className="text-4xl sm:text-6xl font-black text-slate-950 tracking-tighter uppercase mb-6">Mes Documents</h3>
                 <div className="px-6 py-3 bg-emerald-50 text-emerald-600 rounded-full text-[10px] font-black uppercase tracking-[0.4em] inline-flex items-center gap-3 w-fit">
                   <Bookmark className="w-4 h-4" /> Mode Hors-ligne
@@ -683,7 +776,7 @@ const App: React.FC = () => {
           </div>
         ) : (nav.level === 'Coin du Bac' || nav.level === 'Coin du Probatoire' || nav.level === 'Coin du BEPC') && !nav.year ? (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
-            {Array.from({ length: 2025 - 2018 + 1 }, (_, i) => (2025 - i).toString()).map(y => (
+            {Array.from({ length: 2026 - 2016 + 1 }, (_, i) => (2026 - i).toString()).map(y => (
               <NavCard key={y} title={y} icon={<Calendar />} colorClass="bg-red-600" onClick={() => setNav(p => ({ ...p, year: y }))} />
             ))}
           </div>
@@ -711,11 +804,26 @@ const App: React.FC = () => {
               <NavCard key={subj} title={subj} icon={<Sparkles />} colorClass="bg-emerald-600" onClick={() => setNav(p => ({ ...p, subject: subj }))} />
             ))}
           </div>
-        ) : nav.level && nav.level !== 'Coin Externe' && nav.subject && !nav.sequence && (nav.level !== 'Coin du Bac' && nav.level !== 'Coin du Probatoire' && nav.level !== 'Coin du BEPC') ? (
+        ) : nav.level && nav.level !== 'Coin Externe' && nav.subject && !nav.sequence ? (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
-            {SEQUENCES.filter(s => nav.level === 'Seconde' ? s !== 'Epreuve Zéro' : true).map(seq => (
-              <NavCard key={seq} title={seq} icon={<Zap />} colorClass="bg-blue-600" onClick={() => setNav(p => ({ ...p, sequence: seq as Sequence }))} />
-            ))}
+            {(nav.level === 'Coin du Bac' || nav.level === 'Coin du Probatoire' || nav.level === 'Coin du BEPC') ? (
+              <>
+                {nav.year !== '2026' && (
+                  <NavCard title="Examen Officiel" icon={<Zap />} colorClass="bg-indigo-600" onClick={() => setNav(p => ({ ...p, sequence: 'Examen Officiel' }))} />
+                )}
+                <NavCard title="Examen Blanc" icon={<Zap />} colorClass="bg-red-600" onClick={() => setNav(p => ({ ...p, sequence: 'Examen Blanc' }))} />
+              </>
+            ) : (
+              SEQUENCES.map(seq => (
+                <NavCard 
+                  key={seq} 
+                  title={seq} 
+                  icon={<Zap />} 
+                  colorClass="bg-blue-600" 
+                  onClick={() => setNav(p => ({ ...p, sequence: seq as Sequence }))} 
+                />
+              ))
+            )}
           </div>
         ) : (
           <div className="space-y-16 animate-in fade-in duration-1000">
@@ -752,10 +860,19 @@ const App: React.FC = () => {
                     >
                       <AlertTriangle className="w-8 h-8" />
                     </button>
+                    
+                    <button
+                      onClick={() => setShowAgentUpload(true)}
+                      className="flex items-center gap-6 px-12 py-7 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-[40px] font-black uppercase tracking-widest text-[11px] shadow-xl hover:scale-105 transition-all"
+                    >
+                      <Sparkles className="w-8 h-8" />
+                      <span>Agent IA — Batch</span>
+                    </button>
+
                     <label className={`flex-1 flex items-center gap-6 px-12 py-7 rounded-[40px] font-black cursor-pointer transition-all shadow-3xl active:scale-95 group ${isUploading ? 'bg-slate-400' : adminMode === 'challenges' ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-slate-950 text-white hover:bg-indigo-600'}`}>
                       {isUploading ? <RefreshCw className="w-10 h-10 animate-spin" /> : <Plus className="w-10 h-10" />}
                       <span className="uppercase tracking-[0.3em] text-[11px]">{isUploading ? 'Envoi...' : adminMode === 'challenges' ? 'Programmer le Défi' : 'Ajouter Document'}</span>
-                      <input type="file" accept="application/pdf" className="hidden" onChange={handleFileUpload} />
+                      <input type="file" accept="application/pdf" multiple className="hidden" onChange={handleFileUpload} />
                     </label>
                   </div>
                 </div>
@@ -878,6 +995,20 @@ const App: React.FC = () => {
 
       {/* Sticky Footer Ad */}
       <AdBanner type="sticky-footer" />
+
+      {/* Agent IA Modal */}
+      <AnimatePresence>
+        {showAgentUpload && (
+          <AgentUpload 
+            supabase={supabase}
+            ai={ai}
+            onClose={() => setShowAgentUpload(false)}
+            onSuccess={() => {
+              // On laisse le realtime s'occuper de la mise à jour
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -1194,6 +1325,13 @@ const ChallengeSection: React.FC<{ challengeUser: ChallengeUser | null, setChall
       const startTime = new Date();
       startTime.setHours(21, 0, 0, 0);
       const endTime = new Date(startTime.getTime() + duration * 1000);
+      
+      if (now > endTime) {
+        alert("Ce défi est déjà terminé pour aujourd'hui.");
+        setStep('class');
+        return;
+      }
+
       const remaining = Math.max(0, Math.floor((endTime.getTime() - now.getTime()) / 1000));
       setActiveTimeLeft(remaining);
     }
@@ -1369,16 +1507,18 @@ const ChallengeSection: React.FC<{ challengeUser: ChallengeUser | null, setChall
 
       // 2. Correction par IA
       const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: [
-          { text: `Tu es un correcteur scolaire expert au Cameroun. Analyse ce travail d'élève pour l'épreuve de ${subject}. Attribue une note sur 20 et donne un feedback constructif détaillé. Réponds UNIQUEMENT au format JSON: {"score": 15, "feedback": "Ton raisonnement est bon mais attention aux unités..."}` },
-          ...submissionPhotos.map(p => ({
-            inlineData: {
-              mimeType: "image/jpeg",
-              data: p.split(',')[1]
-            }
-          }))
-        ],
+        model: 'gemini-3.1-pro-preview',
+        contents: {
+          parts: [
+            { text: `Tu es un correcteur scolaire expert au Cameroun. Analyse ce travail d'élève pour l'épreuve de ${subject}. Attribue une note sur 20 et donne un feedback constructif détaillé. Réponds UNIQUEMENT au format JSON: {"score": 15, "feedback": "Ton raisonnement est bon mais attention aux unités..."}` },
+            ...submissionPhotos.map(p => ({
+              inlineData: {
+                mimeType: "image/jpeg",
+                data: p.split(',')[1]
+              }
+            }))
+          ]
+        },
       });
       
       const result = JSON.parse(response.text || '{"score": 10, "feedback": "Correction effectuée."}');
