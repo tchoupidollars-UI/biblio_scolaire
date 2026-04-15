@@ -27,6 +27,13 @@ const AgentUpload: React.FC<AgentUploadProps> = ({ supabase, ai, onClose, onSucc
   const [items, setItems] = useState<UploadItem[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
 
+  // Debug log
+  React.useEffect(() => {
+    if (items.length > 0) {
+      console.log("📦 AgentUpload Items:", items.length, items);
+    }
+  }, [items]);
+
   const extractTextFromPdf = async (file: File): Promise<string> => {
     try {
       const arrayBuffer = await file.arrayBuffer();
@@ -174,7 +181,8 @@ const AgentUpload: React.FC<AgentUploadProps> = ({ supabase, ai, onClose, onSucc
       <motion.div 
         initial={{ scale: 0.9, y: 20 }}
         animate={{ scale: 1, y: 0 }}
-        className="bg-white w-full max-w-4xl rounded-[40px] shadow-3xl overflow-hidden flex flex-col max-h-[90vh]"
+        className="bg-white w-full max-w-4xl rounded-[40px] shadow-2xl overflow-hidden flex flex-col h-[85vh] max-h-[900px]"
+        style={{ backgroundColor: '#ffffff' }}
       >
         {/* Header */}
         <div className="p-8 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-indigo-50 to-white">
@@ -193,7 +201,7 @@ const AgentUpload: React.FC<AgentUploadProps> = ({ supabase, ai, onClose, onSucc
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-8 space-y-8 no-scrollbar">
+        <div className="flex-1 overflow-y-auto p-8 space-y-4 no-scrollbar bg-white" style={{ backgroundColor: '#ffffff' }}>
           {items.length === 0 ? (
             <div 
               onDragOver={(e) => e.preventDefault()}
@@ -218,7 +226,7 @@ const AgentUpload: React.FC<AgentUploadProps> = ({ supabase, ai, onClose, onSucc
           ) : (
             <div className="space-y-4">
               {items.map((item) => (
-                <div key={item.id} className="p-6 bg-slate-50 rounded-[30px] border-2 border-transparent hover:border-indigo-100 transition-all flex items-center gap-6">
+                <div key={item.id} className="p-6 bg-white rounded-[30px] border-2 border-slate-100 shadow-sm flex items-center gap-6">
                   <div className={`p-4 rounded-2xl ${
                     item.status === 'success' ? 'bg-emerald-100 text-emerald-600' :
                     item.status === 'error' ? 'bg-red-100 text-red-600' :
